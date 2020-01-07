@@ -1,14 +1,13 @@
 #include <sourcemod>
 
-#include <discord>
 #include <SteamWorks>
 
+#undef REQUIRE_PLUGIN
+#include <discord>
 
 
 //#define DEBUG
 
-
-#define DISCORD_KEY         "zmrdiscordnotify"
 
 
 #define SYNTAX_COLOR_RED    "prolog"
@@ -18,13 +17,13 @@
 #define PREFIX              "[DISCORD] "
 
 #define PERSISTENT_FILE     "zmrdiscordnotify.cfg"
+#define CONFIG_FILE         "configs/zmrdiscordnotify.cfg"
 
 
 ConVar g_ConVar_Hostname;
 
 
 ConVar g_ConVar_PlayerNotificationInterval;
-ConVar g_ConVar_PlayerNotificationPrefix;
 ConVar g_ConVar_PersistentFile;
 
 
@@ -37,6 +36,10 @@ int g_time_LastCrashReport;
 
 int g_nMaxPlayers = 16;
 
+char g_szToken[512];
+char g_szUrl[256];
+
+
 public void OnPluginStart()
 {
     // CONVARS
@@ -48,7 +51,6 @@ public void OnPluginStart()
     
 
     g_ConVar_PlayerNotificationInterval = CreateConVar( "discord_playernotify", "3600", "How often (in seconds) do we allow players to notify others on Discord.", 0, true, 900.0, true, 133700.0 );
-    g_ConVar_PlayerNotificationPrefix = CreateConVar( "discord_notifyprefix", "", "Prefix of player notification. Put mentions like @here here." );
     g_ConVar_PersistentFile = CreateConVar( "discord_persistentfile", PERSISTENT_FILE, "Name of the file to use. Useful if you're running multiple servers from one instance." );
     
     
@@ -63,12 +65,14 @@ public void OnPluginStart()
     //    SavePersistentData( true );
     //}
     
+    LoadOptions();
+    
     
 #if defined DEBUG
-    char ip[64];
-    GetServerIp( ip, sizeof( ip ) );
+    char socket[64];
+    GetServerSocket( socket, sizeof( socket ) );
     
-    PrintToServer( PREFIX..."Detected ip: %s", ip );
+    PrintToServer( PREFIX..."Detected socket: %s", socket );
 #endif
 }
 
@@ -257,7 +261,9 @@ stock bool SendNotification( int client )
     int iCurTime = GetTime();
     
     int timeDelta = iCurTime - g_time_LastPlayerNotification;
-    if ( timeDelta < g_ConVar_PlayerNotificationInterval.IntValue )
+    
+    // Let console notify without limits.
+    if ( client > 0 && timeDelta < g_ConVar_PlayerNotificationInterval.IntValue )
     {
         ReplyToCommand( client, PREFIX..."You can't send a notification yet!" );
         return false;
@@ -275,34 +281,57 @@ stock bool SendNotification( int client )
     
     
     char szConnect[512];
-    GetConnectLink( szConnect, sizeof( szConnect ) );
-    
-    
-    char szPrefix[512];
-    g_ConVar_PlayerNotificationPrefix.GetString( szPrefix, sizeof( szPrefix ) );
-    
-    if ( szPrefix[0] != 0 )
-    {
-        Format( szPrefix, sizeof( szPrefix ), "%s\\n", szPrefix );
-    }
+    GetServerSocket( szConnect, sizeof( szConnect ) );
     
     
     char szMsg[1024];
-    FormatEx( szMsg, sizeof( szMsg ), "%s```css\\n%s wants you to join %s!```%s",
-        szPrefix,
-        szPlayerName,
+    
+    BuildJson( szMsg, sizeof( szMsg ),
+        g_szToken,
         szServerName,
-        szConnect );
+        szConnect,
+        GetClientCount( false ),
+        MaxClients,
+        szPlayerName );
+        
+#if defined DEBUG
+    PrintToServer( PREFIX..."Json:" );
+    PrintToServer( "%s", szMsg );
+#endif
     
-    BuildJson( szServerName, szMsg, sizeof( szMsg ) );
+    
+    Handle hRequest = SteamWorks_CreateHTTPRequest( k_EHTTPMethodPOST, g_szUrl );
+    SteamWorks_SetHTTPRequestRawPostBody( hRequest, "application/json", szMsg, strlen( szMsg ) );
     
     
-    Discord_SendMessage( DISCORD_KEY, szMsg );
+    if ( !hRequest || !SteamWorks_SetHTTPCallbacks( hRequest, OnRequestCompleted ) || !SteamWorks_SendHTTPRequest( hRequest ) )
+    {
+        delete hRequest;
+    }
+    
     
     
     g_time_LastPlayerNotification = iCurTime;
     
     return true;
+}
+
+public void OnRequestCompleted( Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode )
+{
+	if ( !bFailure && bRequestSuccessful && eStatusCode == k_EHTTPStatusCode200OK )
+	{
+		SteamWorks_GetHTTPResponseBodyCallback( hRequest, OnBodyCallback );
+	}
+
+	delete hRequest;
+}
+
+public void OnBodyCallback( const char[] szData )
+{
+#if defined DEBUG
+    PrintToServer( PREFIX..."Return body:" );
+    PrintToServer( "%s", szData );
+#endif
 }
 
 stock void GetPlayerName( int client, char[] sz, int len )
@@ -322,7 +351,7 @@ stock void GetPlayerName( int client, char[] sz, int len )
     }
 }
 
-stock void GetServerIp( char[] sz, int len )
+stock void GetServerSocket( char[] sz, int len )
 {
     char port[32];
     GetConVarString( FindConVar( "hostport" ), port, sizeof( port ) );
@@ -341,26 +370,45 @@ stock void GetServerIp( char[] sz, int len )
 
 stock void GetConnectLink( char[] sz, int len )
 {
-    char ip[64];
-    GetServerIp( ip, sizeof( ip ) );
+    char socket[64];
+    GetServerSocket( sz, sizeof( len ) );
     
     if ( sz[0] != 0 )
     {
-        Format( sz, len, "Connect to server: steam://connect/%s", ip );
+        Format( sz, len, "Connect to server: steam://connect/%s", socket );
     }
 }
 
-stock void BuildJson( const char[] szUserName, char[] sz, int len )
+stock void BuildJson(
+    char[] sz,
+    int len,
+    const char[] szToken,
+    const char[] szServerName,
+    const char[] szConnect,
+    int nPlayers,
+    int nMaxPlayers,
+    const char[] szPlayerName )
 {
     // \"username\":\"%s\" 
-    Format( sz, len, "{\"content\":\"%s\"}",
-        sz );
+    FormatEx( sz, len,
+        "{"...
+        "\"token\":\"%s\","...
+        "\"hostname\":\"%s\","...
+        "\"join_ip\":\"%s\","...
+        "\"num_players\":%i,"...
+        "\"max_players\":%i,"...
+        "\"player_name\":\"%s\""...
+        "}",
+        szToken,
+        szServerName,
+        szConnect,
+        nPlayers,
+        nMaxPlayers,
+        szPlayerName );
 }
 
 public Action Cmd_TestDiscord( int client, int args )
 {
-    Discord_SendMessage( DISCORD_KEY, "Testing\\nTesting..." );
-    
     return Plugin_Handled;
 }
 
@@ -391,16 +439,46 @@ stock bool SendCrashNotification( const char[] szMap )
     Discord_EscapeString( szServerName, sizeof( szServerName ) );
     
     
-    char szMsg[1024];
-    FormatEx( szMsg, sizeof( szMsg ), "```%s\\n%s\\nOops! %s crashed :(```", SYNTAX_COLOR_RED, szServerName, szFixedMap );
+    //char szMsg[1024];
+    //FormatEx( szMsg, sizeof( szMsg ), "```%s\\n%s\\nOops! %s crashed :(```", SYNTAX_COLOR_RED, szServerName, szFixedMap );
     
-    BuildJson( szServerName, szMsg, sizeof( szMsg ) );
+    //BuildJson( szServerName, szMsg, sizeof( szMsg ) );
     
     
-    Discord_SendMessage( DISCORD_KEY, szMsg );
+    //Discord_SendMessage( DISCORD_KEY, szMsg );
     
     
     g_time_LastPlayerNotification = iCurTime;
+    
+    return true;
+}
+
+stock bool LoadOptions()
+{
+    KeyValues kv = new KeyValues( "DiscordNotify" );
+    
+    
+    char szFile[PLATFORM_MAX_PATH];
+    BuildPath( Path_SM, szFile, sizeof( szFile ), CONFIG_FILE );
+    
+    if ( !kv.ImportFromFile( szFile ) )
+    {
+        delete kv;
+        return false;
+    }
+    
+    
+    
+    kv.GetString( "token", g_szToken, sizeof( g_szToken ) );
+    kv.GetString( "url", g_szUrl, sizeof( g_szUrl ) );
+    
+#if defined DEBUG
+    PrintToServer( PREFIX..."Token: %s", g_szToken );
+    PrintToServer( PREFIX..."Url: %s", g_szUrl );
+#endif
+    
+    
+    delete kv;
     
     return true;
 }
