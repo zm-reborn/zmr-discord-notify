@@ -10,13 +10,9 @@
 
 
 
-#define SYNTAX_COLOR_RED    "prolog"
-#define SYNTAX_COLOR_ORANGE "fix"
-#define SYNTAX_COLOR_GREEN  "css"
-
 #define PREFIX              "[DISCORD] "
 
-#define PERSISTENT_FILE     "zmrdiscordnotify.cfg"
+#define PERSISTENT_FILE     "zmrdiscordnotify_persistent.cfg"
 #define CONFIG_FILE         "configs/zmrdiscordnotify.cfg"
 
 
@@ -33,8 +29,6 @@ int g_time_LastPlayerCountUpdate;
 int g_time_LastPlayerNotification;
 int g_time_LastCrashReport;
 
-
-int g_nMaxPlayers = 16;
 
 char g_szToken[512];
 char g_szUrl[256];
@@ -56,7 +50,6 @@ public void OnPluginStart()
     
     // CMDS
     RegConsoleCmd( "sm_discord", Cmd_Discord );
-    RegAdminCmd( "sm_testdiscordnewline", Cmd_TestDiscord, ADMFLAG_ROOT );
     
     
     
@@ -98,146 +91,6 @@ public void OnClientPutInServer( int client )
 public void OnClientPostAdminCheck( int client )
 {
     //int iCurNum = ClientCount( client );
-}
-
-stock void GetColor( int playercount, char[] sz, int len )
-{
-    if ( playercount <= 0 )
-    {
-        strcopy( sz, len, "dsconfig" );
-        return;
-    }
-    
-    int maxplayers = g_nMaxPlayers;
-    
-    if ( playercount >= maxplayers )
-    {
-        // Red
-        strcopy( sz, len, SYNTAX_COLOR_RED );
-        return;
-    }
-    
-    int orangeGrace = RoundFloat( maxplayers * 0.5 );
-    if ( playercount >= orangeGrace )
-    {
-        // Orange
-        strcopy( sz, len, SYNTAX_COLOR_ORANGE );
-        return;
-    }
-    
-    // Green
-    strcopy( sz, len, SYNTAX_COLOR_GREEN );
-}
-
-stock int ClientCount( int ignore = 0, bool bIgnoreBots = true )
-{
-    int num = 0;
-    
-    for ( int i = 1; i <= MaxClients; ++i )
-    {
-        if ( i == ignore )
-            continue;
-        
-        if ( !IsClientConnected( i ) )
-            continue;
-        
-        if ( bIgnoreBots && IsClientInGame( i ) && IsFakeClient( i ) )
-            continue;
-        
-        
-        ++num;
-    }
-    
-    return num;
-}
-
-stock bool LoadPersistentData()
-{
-    char szFile[64];
-    g_ConVar_PersistentFile.GetString( szFile, sizeof( szFile ) );
-    
-    char szPath[PLATFORM_MAX_PATH];
-    BuildPath( Path_SM, szPath, sizeof( szPath ), "data/%s", szFile );
-    
-    KeyValues kv = new KeyValues( "ActivityPersistent" );
-    if ( !kv.ImportFromFile( szPath ) )
-    {
-        delete kv;
-        return false;
-    }
-    
-    
-    int lastCount = kv.GetNum( "map_end_playercount", -1 );
-    
-    g_time_LastPlayerCountUpdate = kv.GetNum( "last_playercount_update", 0 );
-    g_time_LastPlayerNotification = kv.GetNum( "last_player_notification", 0 );
-    g_time_LastCrashReport = kv.GetNum( "last_crash", 0 );
-    
-
-    if ( lastCount == 0 )
-    {
-        char szMap[64];
-        kv.GetString( "last_crash_mapname", szMap, sizeof( szMap ) );
-        
-        
-        SendCrashNotification( szMap );
-    }
-    
-    
-    delete kv;
-    
-    return lastCount >= 0;
-}
-
-stock bool SavePersistentData( bool bResetCount = false )
-{
-    char szFile[64];
-    g_ConVar_PersistentFile.GetString( szFile, sizeof( szFile ) );
-    
-    char szPath[PLATFORM_MAX_PATH];
-    BuildPath( Path_SM, szPath, sizeof( szPath ), "data/%s", szFile );
-    
-    
-    KeyValues kv = new KeyValues( "ActivityPersistent" );
-    
-    
-    int saveCount;
-    if ( !bResetCount )
-    {
-        saveCount = 1;
-        
-        if ( saveCount < 1 )
-            saveCount = ClientCount();
-    }
-    else
-    {
-        saveCount = 0;
-    }
-    
-    
-    kv.SetNum( "map_end_playercount", saveCount );
-    
-    kv.SetNum( "last_playercount_update", g_time_LastPlayerCountUpdate );
-    kv.SetNum( "last_player_notification", g_time_LastPlayerNotification );
-    kv.SetNum( "last_crash", g_time_LastCrashReport );
-    
-    
-    char szMap[64];
-    GetCurrentMap( szMap, sizeof( szMap ) );
-    kv.SetString( "last_crash_mapname", szMap );
-    
-    
-    if ( !kv.ExportToFile( szPath ) )
-    {
-        LogError( PREFIX..."Couldn't save persistent data!" );
-        
-        delete kv;
-        return false;
-    }
-    
-    delete kv;
-    
-    return true;
 }
 
 public Action Cmd_Discord( int client, int args )
@@ -368,17 +221,6 @@ stock void GetServerSocket( char[] sz, int len )
         port );
 }
 
-stock void GetConnectLink( char[] sz, int len )
-{
-    char socket[64];
-    GetServerSocket( sz, sizeof( len ) );
-    
-    if ( sz[0] != 0 )
-    {
-        Format( sz, len, "Connect to server: steam://connect/%s", socket );
-    }
-}
-
 stock void BuildJson(
     char[] sz,
     int len,
@@ -407,9 +249,146 @@ stock void BuildJson(
         szPlayerName );
 }
 
-public Action Cmd_TestDiscord( int client, int args )
+stock bool LoadOptions()
 {
-    return Plugin_Handled;
+    KeyValues kv = new KeyValues( "DiscordNotify" );
+    
+    
+    char szFile[PLATFORM_MAX_PATH];
+    BuildPath( Path_SM, szFile, sizeof( szFile ), CONFIG_FILE );
+    
+    if ( !kv.ImportFromFile( szFile ) )
+    {
+        delete kv;
+        return false;
+    }
+    
+    
+    
+    kv.GetString( "token", g_szToken, sizeof( g_szToken ) );
+    kv.GetString( "url", g_szUrl, sizeof( g_szUrl ) );
+    
+#if defined DEBUG
+    PrintToServer( PREFIX..."Token: %s", g_szToken );
+    PrintToServer( PREFIX..."Url: %s", g_szUrl );
+#endif
+    
+    
+    delete kv;
+    
+    return true;
+}
+
+
+stock int ClientCount( int ignore = 0, bool bIgnoreBots = true )
+{
+    int num = 0;
+    
+    for ( int i = 1; i <= MaxClients; ++i )
+    {
+        if ( i == ignore )
+            continue;
+        
+        if ( !IsClientConnected( i ) )
+            continue;
+        
+        if ( bIgnoreBots && IsClientInGame( i ) && IsFakeClient( i ) )
+            continue;
+        
+        
+        ++num;
+    }
+    
+    return num;
+}
+
+stock bool LoadPersistentData()
+{
+    char szFile[64];
+    g_ConVar_PersistentFile.GetString( szFile, sizeof( szFile ) );
+    
+    char szPath[PLATFORM_MAX_PATH];
+    BuildPath( Path_SM, szPath, sizeof( szPath ), "data/%s", szFile );
+    
+    KeyValues kv = new KeyValues( "ActivityPersistent" );
+    if ( !kv.ImportFromFile( szPath ) )
+    {
+        delete kv;
+        return false;
+    }
+    
+    
+    int lastCount = kv.GetNum( "map_end_playercount", -1 );
+    
+    g_time_LastPlayerCountUpdate = kv.GetNum( "last_playercount_update", 0 );
+    g_time_LastPlayerNotification = kv.GetNum( "last_player_notification", 0 );
+    g_time_LastCrashReport = kv.GetNum( "last_crash", 0 );
+    
+
+    if ( lastCount == 0 )
+    {
+        char szMap[64];
+        kv.GetString( "last_crash_mapname", szMap, sizeof( szMap ) );
+        
+        
+        SendCrashNotification( szMap );
+    }
+    
+    
+    delete kv;
+    
+    return lastCount >= 0;
+}
+
+stock bool SavePersistentData( bool bResetCount = false )
+{
+    char szFile[64];
+    g_ConVar_PersistentFile.GetString( szFile, sizeof( szFile ) );
+    
+    char szPath[PLATFORM_MAX_PATH];
+    BuildPath( Path_SM, szPath, sizeof( szPath ), "data/%s", szFile );
+    
+    
+    KeyValues kv = new KeyValues( "ActivityPersistent" );
+    
+    
+    int saveCount;
+    if ( !bResetCount )
+    {
+        saveCount = 1;
+        
+        if ( saveCount < 1 )
+            saveCount = ClientCount();
+    }
+    else
+    {
+        saveCount = 0;
+    }
+    
+    
+    kv.SetNum( "map_end_playercount", saveCount );
+    
+    kv.SetNum( "last_playercount_update", g_time_LastPlayerCountUpdate );
+    kv.SetNum( "last_player_notification", g_time_LastPlayerNotification );
+    kv.SetNum( "last_crash", g_time_LastCrashReport );
+    
+    
+    char szMap[64];
+    GetCurrentMap( szMap, sizeof( szMap ) );
+    kv.SetString( "last_crash_mapname", szMap );
+    
+    
+    if ( !kv.ExportToFile( szPath ) )
+    {
+        LogError( PREFIX..."Couldn't save persistent data!" );
+        
+        delete kv;
+        return false;
+    }
+    
+    delete kv;
+    
+    return true;
 }
 
 stock bool SendCrashNotification( const char[] szMap )
@@ -453,32 +432,3 @@ stock bool SendCrashNotification( const char[] szMap )
     return true;
 }
 
-stock bool LoadOptions()
-{
-    KeyValues kv = new KeyValues( "DiscordNotify" );
-    
-    
-    char szFile[PLATFORM_MAX_PATH];
-    BuildPath( Path_SM, szFile, sizeof( szFile ), CONFIG_FILE );
-    
-    if ( !kv.ImportFromFile( szFile ) )
-    {
-        delete kv;
-        return false;
-    }
-    
-    
-    
-    kv.GetString( "token", g_szToken, sizeof( g_szToken ) );
-    kv.GetString( "url", g_szUrl, sizeof( g_szUrl ) );
-    
-#if defined DEBUG
-    PrintToServer( PREFIX..."Token: %s", g_szToken );
-    PrintToServer( PREFIX..."Url: %s", g_szUrl );
-#endif
-    
-    
-    delete kv;
-    
-    return true;
-}
