@@ -2,10 +2,10 @@
 	"token": "this_is_the_token",
 	
 	"hostname": "Mehis' Awesome Server",
-	"join_ip": "localhost:27015"
+	"join_ip": "localhost:27015",
 	
 	"num_players": 12,
 	"max_players": 16,
 	
-	"player_name": "Mehis",
+	"player_name": "Mehis"
 }
