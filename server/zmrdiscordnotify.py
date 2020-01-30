@@ -6,6 +6,9 @@ import ssl
 # Discord
 import discord
 
+import re
+import datetime
+import sqlite3
 from os import path
 from configparser import ConfigParser
 
@@ -32,6 +35,102 @@ for token in validtokens:
 print()
 
 
+class Event:
+    def __init__(self, id, name, time, description):
+        self.id = id
+        self.name = name
+        self.time = time
+        self.description = description
+
+    @staticmethod
+    def dateformat():
+        return '%Y-%m-%d %H:%M'
+
+    def time_to_str(self):
+        return self.time.strftime(Event.dateformat())
+
+    @staticmethod
+    def create_event(msg_content):
+        data = re.findall('"(.+?)"', msg_content)
+
+        if len(data) < 2:
+            return None
+
+        cur_time = datetime.datetime.utcnow()
+        target_time = datetime.datetime.strptime(data[1], Event.dateformat())
+
+        # We can't make an event in the past!
+        if target_time < cur_time:
+            return None
+
+        delta = target_time - cur_time
+
+        time = datetime.datetime.now() + delta
+
+        event = Event(0, data[0], time, '' if len(data) <= 2 else data[2])
+
+    @staticmethod
+    def create_event_sql(row):
+        # id, name, description, time
+        return Event(row[0], row[1], row[3], row[2])
+
+    def format_time_todelta(self):
+        timedelta = self.time - datetime.datetime.now()
+        days = timedelta.days
+        hours = timedelta.seconds // 3600
+        
+        s = ''
+        
+        if days > 0:
+            s = '%i days ' % days
+        if hours > 0:
+            s += '%i hours' % hours
+
+        return s
+
+    def db_insert(self, conn):
+        c = conn.cursor()
+        c.execute(
+            '''INSERT INTO ntf_events (name,description,time) VALUES
+            (?,?,?)''',
+            (self.name, self.description, self.time_to_str())
+        )
+        c.execute('''SELECT LAST_INSERT_ROWID()''')
+        self.id = c.fetchone()[0]
+        conn.commit()
+
+    def db_remove(self, conn):
+        c = conn.cursor()
+        c.execute(
+            '''DELETE FROM ntf_events WHERE id=?''',
+            (self.id)
+        )
+        conn.commit()
+
+    async def create_msg(self, member, message):
+        await message.channel.send(
+            '%s Added event %s. (%s) Happens in %s' %
+            (member.mention,
+                self.name,
+                self.description,
+                self.format_time_todelta())
+        )
+
+    async def remove_msg(self, member, message):
+        await message.channel.send(
+            '%s Removed event %s.' %
+            (member.mention, self.name))
+
+    async def start_msg(self, channel, ping_role):
+        desc = '%s %s is starting!' % (ping_role.mention, self.name)
+        embed = discord.Embed(
+            title=self.name,
+            description=self.description,
+            color=0x13e82e
+        )
+        await channel.send(content=desc, embed=embed)
+
+
 class RequestData:
     def __init__(self, data, validtoken):
         if not data['token'] in validtokens:
@@ -52,6 +151,8 @@ class MyDiscordClient(discord.Client):
         self.my_guild = None
         self.my_ping_role = None
 
+        self.events = []
+
         self.token = config.get('discord', 'token')
 
         self.ping_role = int(config.get('discord', 'ping_role'))
@@ -67,6 +168,26 @@ class MyDiscordClient(discord.Client):
 
         self.bg_task = self.loop.create_task(self.init_webapp())
 
+        self.init_sqlite()
+
+    def init_sqlite(self):
+        self.sqlite_connection = sqlite3.connect('zmrdiscordnotify.db')
+        
+        c = self.sqlite_connection.cursor()
+        c.execute(
+            '''CREATE TABLE IF NOT EXISTS ntf_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(128) NOT NULL,
+            description VARCHAR(256),
+            time DATETIME NOT NULL)''')
+        c.execute(
+            '''SELECT id,name,description,time FROM ntf_events WHERE time >= CURRENT_TIMESTAMP''')
+
+        for row in c.fetchall():
+            self.events.append(Event.create_event_sql(row))
+
+        self.sqlite_connection.commit()
+
     """Init web app"""
     async def init_webapp(self):
         try:
@@ -74,8 +195,8 @@ class MyDiscordClient(discord.Client):
 
             sslcontext = None
             if self.cert_path or self.key_path:
-            sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            sslcontext.load_cert_chain(self.cert_path, self.key_path)
+                sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                sslcontext.load_cert_chain(self.cert_path, self.key_path)
 
             runner = web.AppRunner(self.webapp)
             await runner.setup()
@@ -119,7 +240,7 @@ class MyDiscordClient(discord.Client):
         if self.my_channel is None:
             raise Exception('Channel with id %i does not exist!' %
                             self.channel_id)
-        
+
         self.my_guild = self.my_channel.guild
 
         self.my_ping_role = self.my_channel.guild.get_role(self.ping_role)
@@ -149,8 +270,15 @@ class MyDiscordClient(discord.Client):
 
         if message.content[1:] == 'remove':
             await self.remove_ping_role(member, message.channel)
+            
+        if message.content.startswith('addevent', 1):
+            await self.add_event(member, message)
+            
+        if message.content.startswith('removeevent', 1):
+            await self.remove_event(member, message)
 
-
+        if message.content.startswith('forceevent', 1):
+            await self.force_event(member, message)
 
     def format_content(self, data):
         desc = '%s **%s** wants you to join! (*%i*/*%i*)' %
@@ -210,9 +338,63 @@ class MyDiscordClient(discord.Client):
         except Exception as e:
             print(e)
 
+    #
+    # Add event
+    #
+    async def add_event(self, member, message):
+        # Check if they can
+        if not member.permissions_in(message.channel).manage_channels:
+            return
 
+        # Create the event
+        event = Event.create_event(message.content)
+        if not event:
+            await message.channel.send('%s Invalid syntax!' % member.mention)
+            return
 
+        event.db_insert(self.sqlite_connection)
+        self.events.append(event)
 
+        await event.create_msg(member, message)
+
+    #
+    # Remove event
+    #
+    async def remove_event(self, member, message):
+        # Check if they can
+        if not member.permissions_in(message.channel).manage_channels:
+            return
+
+        # Find the event they want removed.
+        id = int(message.content.split()[1])
+        event = None
+        for e in self.events:
+            if e.id == id:
+                event = e
+                break
+
+        if not event:
+            await message.channel.send('%s Could not find event #%i!' %
+                                       (member.mention, id))
+            return
+
+        event.db_remove(self.sqlite_connection)
+        self.events.remove(event)
+
+        await event.remove_msg(member, message)
+
+    #
+    # Force event to start
+    #
+    async def force_event(self, member, message):
+        if len(self.events) <= 0:
+            await message.channel.send('%s no events found!' % member.mention)
+
+        event = self.events[0]
+
+        await event.start_msg(self.my_channel, self.my_ping_role)
+
+        self.events.remove(event)
 
 if __name__ == '__main__':
     # Read our config
