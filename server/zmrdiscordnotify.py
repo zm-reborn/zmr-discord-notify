@@ -197,7 +197,8 @@ class MyDiscordClient(discord.Client):
 if __name__ == '__main__':
     # Read our config
     config = ConfigParser()
-    config.readfp(open(path.join(path.dirname(__file__), '.config.ini')))
+    with open(path.join(path.dirname(__file__), '.config.ini')) as fp:
+        config.read_file(fp)
     client = MyDiscordClient(config)
 
     try:
