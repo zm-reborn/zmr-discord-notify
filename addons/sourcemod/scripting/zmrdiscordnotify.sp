@@ -31,7 +31,8 @@ int g_time_LastCrashReport;
 
 
 char g_szToken[512];
-char g_szUrl[256];
+char g_szDestUrl[256];
+char g_szVanityUrl[256];
 
 
 public void OnPluginStart()
@@ -153,7 +154,7 @@ stock bool SendNotification( int client )
 #endif
     
     
-    Handle hRequest = SteamWorks_CreateHTTPRequest( k_EHTTPMethodPOST, g_szUrl );
+    Handle hRequest = SteamWorks_CreateHTTPRequest( k_EHTTPMethodPOST, g_szDestUrl );
     SteamWorks_SetHTTPRequestRawPostBody( hRequest, "application/json", szMsg, strlen( szMsg ) );
     
     
@@ -213,12 +214,25 @@ stock void GetServerSocket( char[] sz, int len )
     int ipaddr[4];
     SteamWorks_GetPublicIP( ipaddr );
     
-    FormatEx( sz, len, "%i.%i.%i.%i:%s",
-        ipaddr[0],
-        ipaddr[1],
-        ipaddr[2],
-        ipaddr[3],
-        port );
+    
+    char host[128];
+    
+    // Server wants to use a vanity url?
+    if ( g_szVanityUrl[0] != 0 )
+    {
+        strcopy( host, sizeof( host ), g_szVanityUrl );
+    }
+    else // Use IP by default.
+    {
+        FormatEx( host, sizeof( host ), "%i.%i.%i.%i",
+            ipaddr[0],
+            ipaddr[1],
+            ipaddr[2],
+            ipaddr[3] );
+    }
+    
+    
+    FormatEx( sz, len, "%s:%s", host, port );
 }
 
 stock void BuildJson(
@@ -266,11 +280,13 @@ stock bool LoadOptions()
     
     
     kv.GetString( "token", g_szToken, sizeof( g_szToken ) );
-    kv.GetString( "url", g_szUrl, sizeof( g_szUrl ) );
+    kv.GetString( "destination", g_szDestUrl, sizeof( g_szDestUrl ) );
+    kv.GetString( "vanity_url", g_szVanityUrl, sizeof( g_szVanityUrl ) );
     
 #if defined DEBUG
     PrintToServer( PREFIX..."Token: %s", g_szToken );
-    PrintToServer( PREFIX..."Url: %s", g_szUrl );
+    PrintToServer( PREFIX..."Destination Url: %s", g_szDestUrl );
+    PrintToServer( PREFIX..."Vanity Url: %s", g_szVanityUrl );
 #endif
     
     
