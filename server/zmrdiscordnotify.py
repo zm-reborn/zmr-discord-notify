@@ -37,19 +37,16 @@ print()
 
 
 class Event:
-    def __init__(self, id, name, time, description):
+    def __init__(self, id, name, time, description='', warned=False):
         self.id = id
         self.name = name
         self.time = time
         self.description = description
-        self.warned = False
+        self.warned = warned
 
     @staticmethod
     def dateformat():
         return '%Y-%m-%d %H:%M'
-
-    def time_to_str(self):
-        return self.time.strftime(Event.dateformat())
 
     # HACK: We need timezone aware datetime object.
     @staticmethod
@@ -82,13 +79,16 @@ class Event:
 
     @staticmethod
     def create_event_sql(row):
-        # id, name, description, time
+        # id, name, description, time, warned
         # print(row)
 
         time = datetime.datetime.strptime(row[3], Event.dateformat())
         time = Event.timezone_aware_time(time)
 
-        return Event(row[0], row[1], time, row[2])
+        return Event(row[0], row[1], time, row[2], row[4])
+
+    def time_to_str(self):
+        return self.time.strftime(Event.dateformat())
 
     def get_delta_to_now(self):
         return self.time.replace(tzinfo=None) - datetime.datetime.now()
@@ -98,14 +98,20 @@ class Event:
             return False
 
         timedelta = self.get_delta_to_now()
+        # If the days are negative, that means it's in the past.
+        # And all logic goes out the window.
+        if timedelta.days < 0:
+            return False
         minutes = timedelta.days * 1440 + timedelta.seconds / 60
-        print(timedelta.days, timedelta.seconds)
         return minutes < 30 and minutes > 2
 
     def should_ping(self):
         timedelta = self.get_delta_to_now()
-        days = timedelta.days if timedelta.days > 0 else 0
-        minutes = days + timedelta.seconds / 60
+        # If the days are negative, that means it's in the past.
+        # And all logic goes out the window.
+        if timedelta.days < 0:
+            return True
+        minutes = timedelta.days * 1440 + timedelta.seconds / 60
         return minutes < 1
 
     def format_time_todelta(self):
@@ -137,46 +143,19 @@ class Event:
         self.id = c.fetchone()[0]
         conn.commit()
 
-    def db_remove(self, conn):
+    def db_markdone(self, conn):
         c = conn.cursor()
         c.execute(
             '''UPDATE ntf_events SET done=1 WHERE id=%i''' % self.id
         )
         conn.commit()
 
-    async def create_msg(self, member, message):
-        await message.channel.send(
-            '%s Added event #%i | %s (%s). Event happens in %s.' %
-            (member.mention,
-                self.id,
-                self.time.strftime(Event.dateformat() + '%z'),
-                self.name,
-                self.format_time_todelta())
+    def db_markwarned(self, conn):
+        c = conn.cursor()
+        c.execute(
+            '''UPDATE ntf_events SET warned=1 WHERE id=%i''' % self.id
         )
-
-    async def remove_msg(self, member, message):
-        await message.channel.send(
-            '%s Removed event %s (%s).' %
-            (member.mention,
-                self.name,
-                self.time.strftime(Event.dateformat() + '%z')))
-
-    async def start_msg(self, channel, ping_role):
-        print('Starting event #%i (%s)' % (self.id, self.name))
-
-        desc = '%s %s is starting!' % (ping_role.mention, self.name)
-        embed = discord.Embed(
-            title=self.name,
-            description=self.description,
-            color=0x13e82e
-        )
-        await channel.send(content=desc, embed=embed)
-
-    async def warn_msg(self, channel):
-        print('Warning event #%i (%s)' % (self.id, self.name))
-
-        desc = '%s will start in %s!' % (self.name, self.format_time_todelta())
-        await channel.send(desc)
+        conn.commit()
 
 
 class RequestData:
@@ -219,6 +198,7 @@ class MyDiscordClient(discord.Client):
 
         self.init_sqlite()
 
+    """Init SQL connection, create tables and get events"""
     def init_sqlite(self):
         self.sqlite_connection = sqlite3.connect('zmrdiscordnotify.db')
 
@@ -229,9 +209,10 @@ class MyDiscordClient(discord.Client):
             name VARCHAR(128) NOT NULL,
             description VARCHAR(256),
             time DATETIME NOT NULL,
-            done INTEGET NOT NULL DEFAULT 0)''')
+            done INTEGET NOT NULL DEFAULT 0,
+            warned INTEGER NOT NULL DEFAULT 0)''')
         c.execute(
-            '''SELECT id,name,description,time
+            '''SELECT id,name,description,time,warned
             FROM ntf_events WHERE done=0''')
 
         for row in c.fetchall():
@@ -275,10 +256,17 @@ class MyDiscordClient(discord.Client):
 
         try:
             print('Sending mention!')
-            await self.my_channel.send(
-                content=self.format_content(data),
-                embed=self.format_embed(data)
-            )
+
+            embed = discord.Embed(
+                title=data.hostname,
+                description=data.link,
+                color=0x13e82e)
+            content = ('%s **%s** wants you to join! (*%i*/*%i*)' %
+                       (self.my_ping_role.mention,
+                        data.player_name,
+                        data.num_players,
+                        data.max_players))
+            await self.my_channel.send(content=content, embed=embed)
         except Exception as e:
             print(e)
 
@@ -291,17 +279,21 @@ class MyDiscordClient(discord.Client):
             await asyncio.sleep(1)
 
         while not self.is_closed():
-            print('check_events')
+            if len(self.events) > 0:
+                print('Checking %i events' % len(self.events))
+
             for event in self.events:
                 if not event.warned and event.should_warn():
-                    await event.warn_msg(self.my_channel)
-                    event.warned = True
+                    await self.warn_event(event)
                 elif event.should_ping():
-                    self.start_event(event)
+                    await self.start_event(event)
                     # We will be removed from the list, so we have to break.
                     break
-            await asyncio.sleep(3)
+            await asyncio.sleep(10)
 
+    #
+    # Discord.py
+    #
     async def on_ready(self):
         print('Logged on as', self.user)
 
@@ -349,40 +341,70 @@ class MyDiscordClient(discord.Client):
         if message.content.startswith('forceevent', 1):
             await self.force_event(member, message)
 
-    def format_content(self, data):
-        desc = ('%s **%s** wants you to join! (*%i*/*%i*)' %
-                (self.my_ping_role.mention,
-                    data.player_name,
-                    data.num_players,
-                    data.max_players))
-        return desc
-
-    def format_embed(self, data):
-        name = data.hostname
-        link = data.link
-
-        embed = discord.Embed(title=name, description=link, color=0x13e82e)
-        return embed
-
+    #
+    # Event stuff
+    #
     async def start_event(self, event):
-        await event.start_msg(self.my_channel, self.my_ping_role)
-        event.db_remove(self.sqlite_connection)
-        self.events.remove(event)
+        print('Starting event #%i (%s)' % (event.id, event.name))
 
+        desc = ('%s %s is starting!' %
+                (self.my_ping_role.mention, event.name))
+        embed = discord.Embed(
+            title=event.name,
+            description=event.description,
+            color=0x13e82e
+        )
+        try:
+            await self.my_channel.send(content=desc, embed=embed)
+            event.db_markdone(self.sqlite_connection)
+            self.events.remove(event)
+        except Exception as e:
+            print(e)
+
+    async def warn_event(self, event):
+        print('Warning event #%i (%s)' % (event.id, event.name))
+
+        desc = ('%s will start in %s!' %
+                (event.name, event.format_time_todelta()))
+
+        try:
+            await self.my_channel.send(desc)
+            event.warned = True
+            event.db_markwarned()
+        except Exception as e:
+            print(e)
+
+    def init_event(self, event):
+        print('Adding event %s' % event.name)
+
+        event.db_insert(self.sqlite_connection)
+        self.events.append(event)
+
+    async def quick_channel_msg(self, msg, channel=None):
+        if channel is None:
+            channel = self.my_channel
+        try:
+            await channel.send(msg)
+        except Exception as e:
+            print(e)
+
+    #
+    # Command actions
+    #
     #
     # Add ping role
     #
     async def add_ping_role(self, member, from_channel):
         if self.my_ping_role in member.roles:
-            try:
-                await from_channel.send("%s You already have role %s!" %
-                                        (member.mention,
-                                            self.my_ping_role.name))
-            except Exception as e:
-                print(e)
+            await self.quick_channel_msg(
+                "%s You already have role %s!" %
+                (member.mention,
+                    self.my_ping_role.name),
+                from_channel)
             return
         try:
-            print('Adding role to user!')
+            print('Adding ping role to user %s!' % member.nick)
+
             await member.add_roles(self.my_ping_role, reason='User requested.')
             await from_channel.send('%s Added role %s.' %
                                     (member.mention, self.my_ping_role.name))
@@ -394,15 +416,15 @@ class MyDiscordClient(discord.Client):
     #
     async def remove_ping_role(self, member, from_channel):
         if self.my_ping_role not in member.roles:
-            try:
-                await from_channel.send("%s You don't have role %s!" %
-                                        (member.mention,
-                                            self.my_ping_role.name))
-            except Exception as e:
-                print(e)
+            await self.quick_channel_msg(
+                "%s You don't have role %s!" %
+                (member.mention,
+                    self.my_ping_role.name),
+                from_channel)
             return
         try:
-            print('Removing role from user!')
+            print('Removing role from user %s!' % member.nick)
+
             await member.remove_roles(
                 self.my_ping_role,
                 reason='User requested.')
@@ -423,13 +445,23 @@ class MyDiscordClient(discord.Client):
         # Create the event
         event = Event.create_event(message.content)
         if not event:
-            await message.channel.send('%s Invalid syntax!' % member.mention)
+            await self.quick_channel_msg(
+                '%s Invalid syntax!' % member.mention,
+                message.channel)
             return
 
-        event.db_insert(self.sqlite_connection)
-        self.events.append(event)
-
-        await event.create_msg(member, message)
+        try:
+            self.init_event(event)
+            await message.channel.send(
+                '%s Added event #%i | %s (%s). Event happens in %s.' %
+                (member.mention,
+                    event.id,
+                    event.time.strftime(Event.dateformat() + '%z'),
+                    event.name,
+                    event.format_time_todelta())
+            )
+        except Exception as e:
+            print(e)
 
     #
     # Remove event
@@ -453,14 +485,25 @@ class MyDiscordClient(discord.Client):
                     break
 
         if not event:
-            await message.channel.send('%s Could not find event #%i!' %
-                                       (member.mention, id))
+            await self.quick_channel_msg(
+                '%s Could not find event #%i!' %
+                (member.mention, id),
+                message.channel)
             return
 
-        event.db_remove(self.sqlite_connection)
-        self.events.remove(event)
+        try:
+            print('Removing event %s!' % event.name)
 
-        await event.remove_msg(member, message)
+            event.db_markdone(self.sqlite_connection)
+            self.events.remove(event)
+
+            await message.channel.send(
+                '%s Removed event %s (%s).' %
+                (member.mention,
+                    event.name,
+                    event.time.strftime(Event.dateformat() + '%z')))
+        except Exception as e:
+            print(e)
 
     #
     # Force event to start
@@ -484,11 +527,13 @@ class MyDiscordClient(discord.Client):
                     break
 
         if not event:
-            await message.channel.send('%s Could not find event #%i!' %
-                                       (member.mention, id))
+            await self.quick_channel_msg(
+                '%s Could not find event #%i!' %
+                (member.mention, id),
+                message.channel)
             return
 
-        self.start_event(event)
+        await self.start_event(event)
 
 if __name__ == '__main__':
     # Read our config
