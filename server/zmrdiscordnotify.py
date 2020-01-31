@@ -86,6 +86,9 @@ class Event:
     def time_to_str(self):
         return self.time.strftime(Event.dateformat())
 
+    def time_to_str_full(self):
+        return self.time.strftime(Event.dateformat() + ' (%z)')
+
     def get_delta_to_now(self):
         return self.time.replace(tzinfo=None) - datetime.datetime.now()
 
@@ -342,6 +345,9 @@ class MyDiscordClient(discord.Client):
         if message.content[1:] == 'remove':
             await self.remove_ping_role(member, message.channel)
 
+        if message.content[1:] == 'events':
+            await self.list_events(message.channel)
+
         if message.content.startswith('addevent', 1):
             await self.add_event(member, message)
 
@@ -445,6 +451,34 @@ class MyDiscordClient(discord.Client):
             print(e)
 
     #
+    # List events
+    #
+    async def list_events(self, from_channel):
+        if len(self.events) <= 0:
+            await self.quick_channel_msg(
+                "No events found! :(",
+                from_channel)
+            return
+
+        embed = discord.Embed(
+            title='Events',
+            description='',
+            color=0x13e82e)
+
+        for event in self.events:
+            embed.add_field(
+                name='%s | %s' % (event.name, event.time_to_str_full()),
+                value=event.format_time_todelta(),
+                inline=True)
+
+        try:
+            await from_channel.send(
+                content='%i event(s)' % len(self.events),
+                embed=embed)
+        except Exception as e:
+            print(e)
+
+    #
     # Add event
     #
     async def add_event(self, member, message):
@@ -466,7 +500,7 @@ class MyDiscordClient(discord.Client):
                 '%s Added event #%i | %s (%s). Event happens in %s.' %
                 (member.mention,
                     event.id,
-                    event.time.strftime(Event.dateformat() + '%z'),
+                    event.time_to_str_full(),
                     event.name,
                     event.format_time_todelta())
             )
