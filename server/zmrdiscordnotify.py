@@ -6,12 +6,16 @@ import ssl
 # Discord
 import discord
 
+# Our stuff
 import asyncio
 import re
 import datetime
 import sqlite3
 from os import path
 from configparser import ConfigParser
+
+
+DB_NAME = 'zmrdiscordnotify.db'
 
 
 def escape_everything(data):
@@ -26,14 +30,6 @@ def get_valid_tokens():
             if len(line) > 0:
                 tokens.append(line)
     return tokens
-
-
-validtokens = get_valid_tokens()
-
-print('Valid tokens:')
-for token in validtokens:
-    print(token)
-print()
 
 
 class Event:
@@ -159,8 +155,8 @@ class Event:
 
 
 class RequestData:
-    def __init__(self, data, validtoken):
-        if not data['token'] in validtokens:
+    def __init__(self, data, valid_tokens):
+        if not data['token'] in valid_tokens:
             raise Exception('Invalid token.')
 
         self.hostname = escape_everything(data['hostname'])
@@ -190,6 +186,12 @@ class MyDiscordClient(discord.Client):
         self.cert_path = config.get('server', 'cert')
         self.key_path = config.get('server', 'key')
 
+        self.valid_tokens = get_valid_tokens()
+
+        print('Valid tokens:')
+        for token in self.valid_tokens:
+            print(token)
+
         self.webapp = web.Application()
         self.webapp.router.add_post('/', self.handle_webrequest)
 
@@ -200,9 +202,14 @@ class MyDiscordClient(discord.Client):
 
     """Init SQL connection, create tables and get events"""
     def init_sqlite(self):
-        self.sqlite_connection = sqlite3.connect('zmrdiscordnotify.db')
+        self.sqlite_connection = sqlite3.connect(
+            path.join(path.dirname(__file__), DB_NAME))
 
         c = self.sqlite_connection.cursor()
+
+        #
+        # Init tables
+        #
         c.execute(
             '''CREATE TABLE IF NOT EXISTS ntf_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -211,6 +218,8 @@ class MyDiscordClient(discord.Client):
             time DATETIME NOT NULL,
             done INTEGET NOT NULL DEFAULT 0,
             warned INTEGER NOT NULL DEFAULT 0)''')
+
+        # Get events
         c.execute(
             '''SELECT id,name,description,time,warned
             FROM ntf_events WHERE done=0''')
@@ -229,23 +238,24 @@ class MyDiscordClient(discord.Client):
             if self.cert_path or self.key_path:
                 sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 sslcontext.load_cert_chain(self.cert_path, self.key_path)
+            else:
+                print('NOT USING SSL')
 
             runner = web.AppRunner(self.webapp)
             await runner.setup()
             site = web.TCPSite(runner, port=self.port, ssl_context=sslcontext)
-            print('Starting HTTP server...')
             await site.start()
         except Exception as e:
             print(e)
         else:
-            print('Done with HTTP server...')
+            print('Started HTTP server.')
 
-    """Handles the POST request from servers"""
+    """Handles the POST request from game servers."""
     async def handle_webrequest(self, request):
         data = None
         try:
             d = await request.json()
-            data = RequestData(d, self.token)
+            data = RequestData(d, self.valid_tokens)
         except Exception as e:
             print('Error occurred when parsing json from request!', e)
             print('Body:')
