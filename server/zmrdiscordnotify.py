@@ -363,7 +363,7 @@ class MyDiscordClient(discord.Client):
     async def start_event(self, event):
         print('Starting event #%i (%s)' % (event.id, event.name))
 
-        desc = ('%s %s is starting!' %
+        desc = ('%s **%s** is starting!' %
                 (self.my_ping_role.mention, event.name))
         embed = discord.Embed(
             title=event.name,
@@ -469,7 +469,7 @@ class MyDiscordClient(discord.Client):
             embed.add_field(
                 name='%s | %s' % (event.name, event.time_to_str_full()),
                 value=event.format_time_todelta(),
-                inline=True)
+                inline=False)
 
         try:
             await from_channel.send(
@@ -497,11 +497,11 @@ class MyDiscordClient(discord.Client):
         try:
             self.init_event(event)
             await message.channel.send(
-                '%s Added event #%i | %s (%s). Event happens in %s.' %
+                '%s Added event **%s** (#%i)\n%s\n**Event happens in %s**.' %
                 (member.mention,
+                    event.name,
                     event.id,
                     event.time_to_str_full(),
-                    event.name,
                     event.format_time_todelta())
             )
         except Exception as e:
@@ -542,10 +542,10 @@ class MyDiscordClient(discord.Client):
             self.events.remove(event)
 
             await message.channel.send(
-                '%s Removed event %s (%s).' %
+                '%s Removed event **%s** (%s).' %
                 (member.mention,
                     event.name,
-                    event.time.strftime(Event.dateformat() + '%z')))
+                    event.time_to_str_full()))
         except Exception as e:
             print(e)
 
