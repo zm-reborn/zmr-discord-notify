@@ -197,6 +197,9 @@ class MyDiscordClient(discord.Client):
 
         self.webapp = web.Application()
         self.webapp.router.add_post('/', self.handle_webrequest)
+        if config.get('server', 'test_get'):
+            self.webapp.router.add_get('/', self.handle_webrequest_test_get)
+            print('Added test GET handler.')
 
         self.loop.run_until_complete(self.init_webapp())
         self.event_task = self.loop.create_task(self.check_events())
@@ -284,6 +287,10 @@ class MyDiscordClient(discord.Client):
             print(e)
 
         return web.Response(text='Success!')
+
+    async def handle_webrequest_test_get(self, request):
+        print('Received test GET request!')
+        return web.Response(text='Hello!')
 
     """Task that checks for any events about to happen"""
     async def check_events(self):
