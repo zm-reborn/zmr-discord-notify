@@ -68,7 +68,7 @@ class Event:
 
         time = datetime.datetime.now() + delta
         time = Event.timezone_aware_time(time)
-        
+
         print('Creating event %s...' % data[0])
 
         return Event(0, data[0], time, '' if len(data) <= 2 else data[2])
@@ -585,6 +585,7 @@ class MyDiscordClient(discord.Client):
             return
 
         await self.start_event(event)
+
 
 if __name__ == '__main__':
     # Read our config
