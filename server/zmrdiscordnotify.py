@@ -18,6 +18,12 @@ from configparser import ConfigParser
 DB_NAME = 'zmrdiscordnotify.db'
 
 
+# Intents
+# We need members so we can add roles.
+INTENTS = discord.Intents.default()
+INTENTS.members = True
+
+
 def escape_everything(data):
     return discord.utils.escape_markdown(discord.utils.escape_mentions(data))
 
@@ -171,7 +177,7 @@ class RequestData:
 
 class MyDiscordClient(discord.Client):
     def __init__(self, config):
-        super().__init__()
+        super().__init__(intents=INTENTS)
 
         self.my_channel = None
         self.my_guild = None
