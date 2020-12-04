@@ -264,6 +264,9 @@ class MyDiscordClient(discord.Client):
 
     """Handles the POST request from game servers."""
     async def handle_webrequest(self, request):
+        if not self.is_ready():
+            return
+
         data = None
         try:
             d = await request.json()
@@ -335,6 +338,8 @@ class MyDiscordClient(discord.Client):
             raise Exception('Role with id %i does not exist!' % self.ping_role)
 
     async def on_message(self, message):
+        if not self.is_ready():
+            return
         # Not command?
         if not message.content or message.content[0] != '!':
             return
