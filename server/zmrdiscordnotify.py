@@ -332,6 +332,8 @@ class MyDiscordClient(discord.Client):
                             self.channel_id)
 
         self.my_guild = self.my_channel.guild
+        if self.my_guild is None:
+            raise Exception('Could not find guild for channel!')
 
         self.my_ping_role = self.my_channel.guild.get_role(self.ping_role)
         if self.my_ping_role is None:
