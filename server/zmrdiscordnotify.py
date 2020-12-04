@@ -254,7 +254,7 @@ class MyDiscordClient(discord.Client):
         except Exception as e:
             print(e)
         else:
-            print('Started HTTP server.')
+            print('Started HTTP server on port %i.' % self.port)
 
     """Handles the POST request from game servers."""
     async def handle_webrequest(self, request):
