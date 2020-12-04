@@ -439,7 +439,7 @@ class MyDiscordClient(discord.Client):
                 from_channel)
             return
         try:
-            print('Adding ping role to user %s!' % member.nick)
+            print('Adding ping role to user %s!' % member.display_name)
 
             await member.add_roles(self.my_ping_role, reason='User requested.')
             await from_channel.send('%s Added role %s.' %
@@ -459,7 +459,7 @@ class MyDiscordClient(discord.Client):
                 from_channel)
             return
         try:
-            print('Removing role from user %s!' % member.nick)
+            print('Removing role from user %s!' % member.display_name)
 
             await member.remove_roles(
                 self.my_ping_role,
