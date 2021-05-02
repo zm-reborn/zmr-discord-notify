@@ -11,9 +11,12 @@ import asyncio
 import re
 import datetime
 import sqlite3
+import logging
 from os import path
 from configparser import ConfigParser
 
+
+LOG_FORMAT = '%(asctime)s | %(message)s'
 
 DB_NAME = 'zmrdiscordnotify.db'
 
@@ -22,6 +25,10 @@ DB_NAME = 'zmrdiscordnotify.db'
 # We need members so we can add roles.
 INTENTS = discord.Intents.default()
 INTENTS.members = True
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def escape_everything(data):
@@ -75,7 +82,7 @@ class Event:
         time = datetime.datetime.now() + delta
         time = Event.timezone_aware_time(time)
 
-        print('Creating event %s...' % data[0])
+        logger.info('Creating event %s...' % data[0])
 
         return Event(0, data[0], time, '' if len(data) <= 2 else data[2])
 
@@ -165,6 +172,9 @@ class Event:
 
 class RequestData:
     def __init__(self, data, valid_tokens):
+        if 'token' not in data:
+            raise Exception('No token in JSON object!')
+
         if not data['token'] in valid_tokens:
             raise Exception('Invalid token.')
 
@@ -195,17 +205,23 @@ class MyDiscordClient(discord.Client):
         self.cert_path = config.get('server', 'cert')
         self.key_path = config.get('server', 'key')
 
+        self.test_post = False
+        if config.get('server', 'test_post'):
+            self.test_post = True
+            logger.info(
+                'Testing POST requests. Notifications are not sent to Discord!')
+
         self.valid_tokens = get_valid_tokens()
 
-        print('Valid tokens:')
+        logger.debug('Valid tokens:')
         for token in self.valid_tokens:
-            print(token)
+            logger.debug(token)
 
         self.webapp = web.Application()
         self.webapp.router.add_post('/', self.handle_webrequest)
         if config.get('server', 'test_get'):
             self.webapp.router.add_get('/', self.handle_webrequest_test_get)
-            print('Added test GET handler.')
+            logger.info('Added test GET handler.')
 
         self.loop.run_until_complete(self.init_webapp())
         self.event_task = self.loop.create_task(self.check_events())
@@ -244,27 +260,29 @@ class MyDiscordClient(discord.Client):
     """Init web app"""
     async def init_webapp(self):
         try:
-            print('Initializing HTTP server...')
+            logger.info('Initializing HTTP server...')
 
             sslcontext = None
             if self.cert_path or self.key_path:
                 sslcontext = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 sslcontext.load_cert_chain(self.cert_path, self.key_path)
             else:
-                print('NOT USING SSL')
+                logger.info('NOT USING SSL')
 
             runner = web.AppRunner(self.webapp)
             await runner.setup()
             site = web.TCPSite(runner, port=self.port, ssl_context=sslcontext)
             await site.start()
         except Exception as e:
-            print(e)
+            logger.error('Error initializing web server: ' + str(e))
         else:
-            print('Started HTTP server on port %i.' % self.port)
+            logger.info('Started HTTP server on port %i.' % self.port)
 
     """Handles the POST request from game servers."""
     async def handle_webrequest(self, request):
         if not self.is_ready():
+            logger.error(
+                'Received a POST request while Discord bot is not ready!')
             return
 
         data = None
@@ -272,15 +290,26 @@ class MyDiscordClient(discord.Client):
             d = await request.json()
             data = RequestData(d, self.valid_tokens)
         except Exception as e:
-            print('Error occurred when parsing json from request!', e)
-            print('Body:')
-            print(await request.text())
+            logger.error(
+                'Error occurred when parsing json from request: ' + str(e))
+            try:
+                body = await request.text()
+                logger.error('Body: ' + str(body))
+            except Exception:
+                pass
 
         if data is None:
             return web.Response(text='Failed!')
 
+        logger.debug('Received valid JSON:')
+        logger.debug(str(data))
+
+        if self.test_post:
+            logger.info('Testing POST. Not sending a mention.')
+            return web.Response(text='Success!')
+
         try:
-            print('Sending mention!')
+            logger.info('Sending mention.')
 
             embed = discord.Embed(
                 title=data.hostname,
@@ -293,12 +322,12 @@ class MyDiscordClient(discord.Client):
                         data.max_players))
             await self.my_channel.send(content=content, embed=embed)
         except Exception as e:
-            print(e)
+            logger.error('Error sending a mention: ' + str(e))
 
         return web.Response(text='Success!')
 
     async def handle_webrequest_test_get(self, request):
-        print('Received test GET request!')
+        logger.info('Received test GET request!')
         return web.Response(text='Hello!')
 
     """Task that checks for any events about to happen"""
@@ -309,7 +338,7 @@ class MyDiscordClient(discord.Client):
 
         while not self.is_closed():
             if len(self.events) > 0:
-                print('Checking %i events' % len(self.events))
+                logger.debug('Checking %i events' % len(self.events))
 
             for event in self.events:
                 if not event.warned and event.should_warn():
@@ -381,7 +410,7 @@ class MyDiscordClient(discord.Client):
     # Event stuff
     #
     async def start_event(self, event):
-        print('Starting event #%i (%s)' % (event.id, event.name))
+        logger.info('Starting event #%i (%s)' % (event.id, event.name))
 
         desc = ('%s **%s** is starting!' %
                 (self.my_ping_role.mention, event.name))
@@ -395,10 +424,10 @@ class MyDiscordClient(discord.Client):
             event.db_markdone(self.sqlite_connection)
             self.events.remove(event)
         except Exception as e:
-            print(e)
+            logger.error('Error starting an event: ' + str(e))
 
     async def warn_event(self, event):
-        print('Warning event #%i (%s)' % (event.id, event.name))
+        logger.info('Warning event #%i (%s)' % (event.id, event.name))
 
         desc = ('%s will start in %s!' %
                 (event.name, event.format_time_todelta()))
@@ -408,10 +437,10 @@ class MyDiscordClient(discord.Client):
             event.warned = True
             event.db_markwarned()
         except Exception as e:
-            print(e)
+            logger.error('Error doing an event warning: ' + str(e))
 
     def init_event(self, event):
-        print('Adding event %s' % event.name)
+        logger.info('Adding event %s' % event.name)
 
         event.db_insert(self.sqlite_connection)
         self.events.append(event)
@@ -422,7 +451,7 @@ class MyDiscordClient(discord.Client):
         try:
             await channel.send(msg)
         except Exception as e:
-            print(e)
+            logger.error('Error sending a channel message: ' + str(e))
 
     #
     # Command actions
@@ -439,13 +468,13 @@ class MyDiscordClient(discord.Client):
                 from_channel)
             return
         try:
-            print('Adding ping role to user %s!' % member.display_name)
+            logger.info('Adding ping role to user %s!' % member.display_name)
 
             await member.add_roles(self.my_ping_role, reason='User requested.')
             await from_channel.send('%s Added role %s.' %
                                     (member.mention, self.my_ping_role.name))
         except Exception as e:
-            print(e)
+            logger.error('Error adding a ping role: ' % str(e))
 
     #
     # Remove ping role
@@ -459,7 +488,7 @@ class MyDiscordClient(discord.Client):
                 from_channel)
             return
         try:
-            print('Removing role from user %s!' % member.display_name)
+            logger.info('Removing role from user %s!' % member.display_name)
 
             await member.remove_roles(
                 self.my_ping_role,
@@ -468,7 +497,7 @@ class MyDiscordClient(discord.Client):
                                     (member.mention,
                                         self.my_ping_role.name))
         except Exception as e:
-            print(e)
+            logger.error('Error removing a ping role: ' + str(e))
 
     #
     # List events
@@ -496,7 +525,7 @@ class MyDiscordClient(discord.Client):
                 content='%i event(s)' % len(self.events),
                 embed=embed)
         except Exception as e:
-            print(e)
+            logger.error('Error listing events: ' + str(e))
 
     #
     # Add event
@@ -525,7 +554,7 @@ class MyDiscordClient(discord.Client):
                     event.format_time_todelta())
             )
         except Exception as e:
-            print(e)
+            logger.error('Error adding an event: ' + str(e))
 
     #
     # Remove event
@@ -556,7 +585,7 @@ class MyDiscordClient(discord.Client):
             return
 
         try:
-            print('Removing event %s!' % event.name)
+            logger.info('Removing event %s!' % event.name)
 
             event.db_markdone(self.sqlite_connection)
             self.events.remove(event)
@@ -567,7 +596,7 @@ class MyDiscordClient(discord.Client):
                     event.name,
                     event.time_to_str_full()))
         except Exception as e:
-            print(e)
+            logger.error('Error removing an event: ' + str(e))
 
     #
     # Force event to start
@@ -605,9 +634,22 @@ if __name__ == '__main__':
     config = ConfigParser()
     with open(path.join(path.dirname(__file__), '.config.ini')) as fp:
         config.read_file(fp)
+
+    # Init logger
+    log_level_str = config.get(
+        'server', 'logging', fallback='').upper()
+    log_level = getattr(logging, log_level_str, logging.WARNING)
+    ch = logging.StreamHandler()
+    ch.setLevel(log_level)
+    formatter = logging.Formatter(LOG_FORMAT)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
     client = MyDiscordClient(config)
 
     try:
         client.run(config.get('discord', 'token'))
     except discord.LoginFailure:
-        print('Failed to log in! Make sure your token is correct!')
+        logger.error('Failed to log in! Make sure your token is correct!')
+    except Exception as e:
+        logger.error('Discord bot ended unexpectedly: ' + str(e))
