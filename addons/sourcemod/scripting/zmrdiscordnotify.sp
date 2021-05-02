@@ -153,14 +153,34 @@ stock bool SendNotification( int client )
     PrintToServer( "%s", szMsg );
 #endif
     
-    
     Handle hRequest = SteamWorks_CreateHTTPRequest( k_EHTTPMethodPOST, g_szDestUrl );
+    
+    if ( !hRequest )
+    {
+        LogError( PREFIX..."Failed to create an HTTP POST request to url: %s!", g_szDestUrl );
+        return false;
+    }
+    
+    
     SteamWorks_SetHTTPRequestRawPostBody( hRequest, "application/json", szMsg, strlen( szMsg ) );
     
     
-    if ( !hRequest || !SteamWorks_SetHTTPCallbacks( hRequest, OnRequestCompleted ) || !SteamWorks_SendHTTPRequest( hRequest ) )
+    if ( !SteamWorks_SetHTTPCallbacks( hRequest, OnRequestCompleted ) )
     {
         delete hRequest;
+        
+        LogError( PREFIX..."Failed to set HTTP POST request's callback function!" );
+        
+        return false;
+    }
+    
+    if ( !SteamWorks_SendHTTPRequest( hRequest ) )
+    {
+        delete hRequest;
+        
+        LogError( PREFIX..."Failed to send the HTTP POST request!" );
+        
+        return false;
     }
     
     
@@ -172,12 +192,22 @@ stock bool SendNotification( int client )
 
 public void OnRequestCompleted( Handle hRequest, bool bFailure, bool bRequestSuccessful, EHTTPStatusCode eStatusCode )
 {
-	if ( !bFailure && bRequestSuccessful && eStatusCode == k_EHTTPStatusCode200OK )
-	{
-		SteamWorks_GetHTTPResponseBodyCallback( hRequest, OnBodyCallback );
-	}
+    if ( !bFailure && bRequestSuccessful && eStatusCode == k_EHTTPStatusCode200OK )
+    {
+        if ( !SteamWorks_GetHTTPResponseBodyCallback( hRequest, OnBodyCallback ) )
+        {
+            LogError( PREFIX..."Failed to set successful request's response body callback!" );
+        }
+    }
+    else
+    {
+        LogError( PREFIX..."Failed to complete the HTTP POST request! (HTTP code: %i | bFailure: %i | bRequestSuccessful: %i)",
+            eStatusCode,
+            bFailure,
+            bRequestSuccessful );
+    }
 
-	delete hRequest;
+    delete hRequest;
 }
 
 public void OnBodyCallback( const char[] szData )
