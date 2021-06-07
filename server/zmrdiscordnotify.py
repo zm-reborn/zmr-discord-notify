@@ -40,8 +40,18 @@ def get_valid_tokens():
     with open(path.join(path.dirname(__file__), '.tokens.txt')) as fp:
         lines = fp.read().splitlines()
         for line in lines:
-            if len(line) > 0:
-                tokens.append(line)
+            if len(line) == 0:
+                continue
+            # Check for comments
+            try:
+                comment_index = line.index(';')
+                if comment_index == 0:
+                    continue
+                line = line[:comment_index]
+            except ValueError:
+                pass
+            tokens.append(line.strip())
+
     return tokens
 
 
@@ -215,7 +225,7 @@ class MyDiscordClient(discord.Client):
 
         logger.debug('Valid tokens:')
         for token in self.valid_tokens:
-            logger.debug(token)
+            logger.debug('"' + token + '"')
 
         self.webapp = web.Application()
         self.webapp.router.add_post('/', self.handle_webrequest)
