@@ -2,9 +2,6 @@
 
 #include <SteamWorks>
 
-#undef REQUIRE_PLUGIN
-#include <discord>
-
 
 //#define DEBUG
 
@@ -131,7 +128,7 @@ stock bool SendNotification( int client )
     char szServerName[128];
     g_ConVar_Hostname.GetString( szServerName, sizeof( szServerName ) );
     
-    Discord_EscapeString( szServerName, sizeof( szServerName ) );
+    EscapeStringForDiscord( szServerName, sizeof( szServerName ) );
     
     
     char szConnect[512];
@@ -157,7 +154,7 @@ stock bool SendNotification( int client )
     
     if ( !hRequest )
     {
-        LogError( PREFIX..."Failed to create an HTTP POST request to url: %s!", g_szDestUrl );
+        LogError( PREFIX..."Failed to create an HTTP POST request to url: '%s'! SteamWorks-extension is probably not compatible with current Source version.", g_szDestUrl );
         return false;
     }
     
@@ -227,7 +224,7 @@ stock void GetPlayerName( int client, char[] sz, int len )
             strcopy( sz, len, "N/A" );
         }
         
-        Discord_EscapeString( sz, len );
+        EscapeStringForDiscord( sz, len );
     }
     else
     {
@@ -455,13 +452,13 @@ stock bool SendCrashNotification( const char[] szMap )
     char szFixedMap[128];
     strcopy( szFixedMap, sizeof( szFixedMap ), szMap );
     
-    Discord_EscapeString( szFixedMap, sizeof( szFixedMap ) );
+    EscapeStringForDiscord( szFixedMap, sizeof( szFixedMap ) );
     
     
     char szServerName[128];
     g_ConVar_Hostname.GetString( szServerName, sizeof( szServerName ) );
     
-    Discord_EscapeString( szServerName, sizeof( szServerName ) );
+    EscapeStringForDiscord( szServerName, sizeof( szServerName ) );
     
     
     //char szMsg[1024];
@@ -478,3 +475,9 @@ stock bool SendCrashNotification( const char[] szMap )
     return true;
 }
 
+stock void EscapeStringForDiscord(char[] string, int len)
+{
+	ReplaceString(string, len, "@", "＠");
+	ReplaceString(string, len, "'", "＇");
+	ReplaceString(string, len, "\"", "＂");
+}
