@@ -1,3 +1,4 @@
 server/.config.ini
 server/.tokens.txt
 server/*.db
+*.smx
