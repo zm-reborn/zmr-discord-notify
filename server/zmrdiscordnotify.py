@@ -219,7 +219,8 @@ class MyDiscordClient(discord.Client):
         if config.get('server', 'test_post'):
             self.test_post = True
             logger.info(
-                'Testing POST requests. Notifications are not sent to Discord!')
+                'Testing POST requests. Notifications are not sent to Discord!'
+            )
 
         self.valid_tokens = get_valid_tokens()
 
