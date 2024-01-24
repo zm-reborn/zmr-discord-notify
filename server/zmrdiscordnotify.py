@@ -91,7 +91,7 @@ class MyDiscordClient(discord.Client):
 
         self.valid_tokens = get_valid_tokens()
 
-        logger.debug('Valid tokens:')
+        logger.info('Loaded %i valid tokens.' % len(self.valid_tokens))
         for token in self.valid_tokens:
             logger.debug('"' + token + '"')
 
@@ -105,7 +105,7 @@ class MyDiscordClient(discord.Client):
         await self.init_webapp()
 
     async def on_ready(self):
-        print('Logged on as', self.user)
+        logger.info('Logged on as %s' % self.user)
 
         self.my_channel = self.get_channel(self.channel_id)
         if self.my_channel is None:
@@ -177,6 +177,8 @@ class MyDiscordClient(discord.Client):
         data = None
         try:
             d = await request.json()
+            logger.debug('Received valid JSON:')
+            logger.debug(str(d))
             data = RequestData(d, self.valid_tokens)
         except Exception as e:
             logger.error(
@@ -189,9 +191,6 @@ class MyDiscordClient(discord.Client):
 
         if data is None:
             return web.Response(text='Failed!')
-
-        logger.debug('Received valid JSON:')
-        logger.debug(str(data))
 
         if self.test_post:
             logger.info('Testing POST. Not sending a mention.')
@@ -234,7 +233,7 @@ class MyDiscordClient(discord.Client):
             await from_channel.send('%s Added role %s.' %
                                     (member.mention, self.my_ping_role.name))
         except Exception as e:
-            logger.error('Error adding a ping role: ' % str(e))
+            logger.error('Error adding a ping role: ' + str(e))
 
     async def remove_ping_role(self, member, from_channel):
         if self.my_ping_role not in member.roles:
@@ -274,7 +273,7 @@ if __name__ == '__main__':
     # Init logger
     log_level_str = config.get(
         'server', 'logging', fallback='').upper()
-    log_level = getattr(logging, log_level_str, logging.WARNING)
+    log_level = getattr(logging, log_level_str, logging.INFO)
     ch = logging.StreamHandler()
     ch.setLevel(log_level)
     formatter = logging.Formatter(LOG_FORMAT)
