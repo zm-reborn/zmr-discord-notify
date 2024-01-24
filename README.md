@@ -4,11 +4,19 @@
 - Install [SteamWorks](http://users.alliedmods.net/~kyles/builds/SteamWorks/) extension.
 - Ask a token from Mehis. Put it in ```token```-key in `addons/sourcemod/configs/zmrdiscordnotify.cfg`
 
-#### Python Server Installation:
+#### Python Server Installation (Docker):
 
-- Install Python 3 and make sure it's in your PATH.
-- Run `pip install -r server/requirements.txt`
-- Configure ```.config.ini``` (create a copy of  ```.config.template.ini```)
-    - You'll need an SSL cert, bot token and channel+role ids.
-- Insert some tokens in ```.tokens.txt``` (create a copy of  ```.tokens.template.txt```)
-- Run the ```zmrdiscordnotify.py``` script.
+```bash
+cd ./server
+
+cp .config.ini.template .config.ini
+
+# Configure .config.ini file with bot token, etc.
+
+cp docker-compose.template.yml docker-compose.yml
+
+# Configure docker-compose.yml with cert paths.
+
+# Build & run image
+docker compose up
+```

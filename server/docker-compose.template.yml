@@ -1,0 +1,11 @@
+version: "3"
+services:
+  zmrdiscordnotify:
+    build: ./
+    volumes:
+      - "./.config.ini:/app/.config.ini"
+      - "./.tokens.txt:/app/.tokens.txt"
+      - "/INSERT_PATH_HERE/fullchain.pem:/app/fullchain.pem"
+      - "/INSERT_PATH_HERE/privkey.pem:/app/privkey.pem"
+    ports:
+      - "3000:3000"
