@@ -8,6 +8,7 @@ import discord
 
 # Our stuff
 import logging
+import sys
 from os import path
 from configparser import ConfigParser
 
@@ -15,22 +16,16 @@ from configparser import ConfigParser
 LOG_FORMAT = '%(asctime)s | %(message)s'
 
 
-# Intents
-# We need members so we can add roles.
-INTENTS = discord.Intents.default()
-INTENTS.members = True
-
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def escape_everything(data):
+def escape_everything(data: str):
     return discord.utils.escape_markdown(discord.utils.escape_mentions(data))
 
 
 def get_valid_tokens():
-    tokens = []
+    tokens: list[str] = []
     with open(path.join(path.dirname(__file__), '.tokens.txt')) as fp:
         lines = fp.read().splitlines()
         for line in lines:
@@ -50,7 +45,7 @@ def get_valid_tokens():
 
 
 class RequestData:
-    def __init__(self, data, valid_tokens):
+    def __init__(self, data, valid_tokens: list[str]):
         if 'token' not in data:
             raise Exception('No token in JSON object!')
 
@@ -65,12 +60,17 @@ class RequestData:
 
 
 class MyDiscordClient(discord.Client):
-    def __init__(self, config):
-        super().__init__(intents=INTENTS)
+    def __init__(self, config: ConfigParser):
+        intents = discord.Intents.default()
+        intents.members = True # We need members so we can add roles.
+        intents.message_content = True # Read messages.
+        super().__init__(intents=intents)
 
-        self.my_channel = None
-        self.my_guild = None
-        self.my_ping_role = None
+        self.init_done = False
+
+        self.my_channel: discord.TextChannel | None = None
+        self.my_guild: discord.Guild | None = None
+        self.my_ping_role: discord.Role | None = None
 
         self.token = config.get('discord', 'token')
 
@@ -107,11 +107,14 @@ class MyDiscordClient(discord.Client):
     async def on_ready(self):
         logger.info('Logged on as %s' % self.user)
 
-        self.my_channel = self.get_channel(self.channel_id)
-        if self.my_channel is None:
+        chnl = self.get_channel(self.channel_id)
+        if chnl is None:
             raise Exception('Channel with id %i does not exist!' %
                             self.channel_id)
+        if not isinstance(chnl, discord.TextChannel):
+            raise Exception(f'Channel {self.channel_id} must be a text channel!')
 
+        self.my_channel = chnl
         self.my_guild = self.my_channel.guild
         if self.my_guild is None:
             raise Exception('Could not find guild for channel!')
@@ -119,9 +122,12 @@ class MyDiscordClient(discord.Client):
         self.my_ping_role = self.my_channel.guild.get_role(self.ping_role)
         if self.my_ping_role is None:
             raise Exception('Role with id %i does not exist!' % self.ping_role)
+        
+        self.init_done = True
 
-    async def on_message(self, message):
-        if not self.is_ready():
+    async def on_message(self, message: discord.Message):
+        if not self.is_ready() or not self.init_done:
+            logger.debug('Received message but bot is not ready yet.')
             return
         # Not command?
         if not message.content or message.content[0] != '!':
@@ -134,6 +140,7 @@ class MyDiscordClient(discord.Client):
                 not isinstance(message.channel, discord.DMChannel)):
             return
         # Not a member of my server
+        assert self.my_guild
         member = self.my_guild.get_member(message.author.id)
         if member is None:
             return
@@ -168,11 +175,11 @@ class MyDiscordClient(discord.Client):
             logger.info('Started HTTP server on port %i.' % self.port)
 
     """Handles the POST request from game servers."""
-    async def handle_webrequest(self, request):
-        if not self.is_ready():
+    async def handle_webrequest(self, request: web.Request):
+        if not self.is_ready() or not self.init_done:
             logger.error(
                 'Received a POST request while Discord bot is not ready!')
-            return
+            return web.Response(status=503)
 
         data = None
         try:
@@ -190,12 +197,13 @@ class MyDiscordClient(discord.Client):
                 pass
 
         if data is None:
-            return web.Response(text='Failed!')
+            return web.Response(text='Failed!', status=400)
 
         if self.test_post:
             logger.info('Testing POST. Not sending a mention.')
             return web.Response(text='Success!')
 
+        assert self.my_ping_role and self.my_channel
         try:
             logger.info('Sending mention.')
 
@@ -214,11 +222,12 @@ class MyDiscordClient(discord.Client):
 
         return web.Response(text='Success!')
 
-    async def handle_webrequest_test_get(self, request):
+    async def handle_webrequest_test_get(self, request: web.Request):
         logger.info('Received test GET request!')
         return web.Response(text='Hello!')
 
-    async def add_ping_role(self, member, from_channel):
+    async def add_ping_role(self, member: discord.Member, from_channel: discord.abc.Messageable):
+        assert self.my_ping_role
         if self.my_ping_role in member.roles:
             await self.quick_channel_msg(
                 "%s You already have role %s!" %
@@ -235,7 +244,8 @@ class MyDiscordClient(discord.Client):
         except Exception as e:
             logger.error('Error adding a ping role: ' + str(e))
 
-    async def remove_ping_role(self, member, from_channel):
+    async def remove_ping_role(self, member: discord.Member, from_channel: discord.abc.Messageable):
+        assert self.my_ping_role
         if self.my_ping_role not in member.roles:
             await self.quick_channel_msg(
                 "%s You don't have role %s!" %
@@ -255,9 +265,10 @@ class MyDiscordClient(discord.Client):
         except Exception as e:
             logger.error('Error removing a ping role: ' + str(e))
 
-    async def quick_channel_msg(self, msg, channel=None):
+    async def quick_channel_msg(self, msg: str, channel: discord.abc.Messageable | None = None):
         if channel is None:
             channel = self.my_channel
+        assert channel
         try:
             await channel.send(msg)
         except Exception as e:
@@ -282,9 +293,16 @@ if __name__ == '__main__':
 
     client = MyDiscordClient(config)
 
+    exitcode = 0
+
     try:
         client.run(config.get('discord', 'token'))
     except discord.LoginFailure:
         logger.error('Failed to log in! Make sure your token is correct!')
+        exitcode = 1
     except Exception as e:
         logger.error('Discord bot ended unexpectedly: ' + str(e))
+        exitcode = 2
+
+    if exitcode > 0:
+        sys.exit(exitcode)
