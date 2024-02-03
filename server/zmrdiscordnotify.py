@@ -67,6 +67,7 @@ class MyDiscordClient(discord.Client):
         super().__init__(intents=intents)
 
         self.init_done = False
+        self.exitcode = 0
 
         self.my_channel: discord.TextChannel | None = None
         self.my_guild: discord.Guild | None = None
@@ -109,20 +110,25 @@ class MyDiscordClient(discord.Client):
 
         chnl = self.get_channel(self.channel_id)
         if chnl is None:
-            raise Exception('Channel with id %i does not exist!' %
-                            self.channel_id)
+            logger.error(f'Channel with id {self.channel_id} does not exist!')
+            self.exitcode = 1
+            await self.close()
+            return
         if not isinstance(chnl, discord.TextChannel):
-            raise Exception(f'Channel {self.channel_id} must be a text channel!')
+            logger.error(f'Channel {self.channel_id} must be a text channel!')
+            self.exitcode = 1
+            await self.close()
+            return
 
         self.my_channel = chnl
         self.my_guild = self.my_channel.guild
-        if self.my_guild is None:
-            raise Exception('Could not find guild for channel!')
-
         self.my_ping_role = self.my_channel.guild.get_role(self.ping_role)
         if self.my_ping_role is None:
-            raise Exception('Role with id %i does not exist!' % self.ping_role)
-        
+            logger.error(f'Role with id {self.ping_role} does not exist!')
+            self.exitcode = 1
+            await self.close()
+            return
+
         self.init_done = True
 
     async def on_message(self, message: discord.Message):
@@ -293,16 +299,14 @@ if __name__ == '__main__':
 
     client = MyDiscordClient(config)
 
-    exitcode = 0
-
     try:
         client.run(config.get('discord', 'token'))
     except discord.LoginFailure:
         logger.error('Failed to log in! Make sure your token is correct!')
-        exitcode = 1
+        client.exitcode = 2
     except Exception as e:
         logger.error('Discord bot ended unexpectedly: ' + str(e))
-        exitcode = 2
+        client.exitcode = 1
 
-    if exitcode > 0:
-        sys.exit(exitcode)
+    if client.exitcode > 0:
+        sys.exit(client.exitcode)
