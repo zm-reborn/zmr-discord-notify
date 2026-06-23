@@ -1,4 +1,4 @@
-FROM python:3.13
+FROM python:3.14
 
 COPY requirements.txt client.py webapp.py run.py /app/
 WORKDIR /app
